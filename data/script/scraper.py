@@ -40,10 +40,12 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-INPUT_CSV = "ML_untagged_data-TITLES.csv"
-OUTPUT_CSV = "article_output.csv"
+SCRAPE_INPUT_CSV = "ML_untagged_data-TITLES.csv"
+SCRAPE_OUTPUT_CSV = "article_output.csv"
 FAILURES_CSV = "scrape_failures.csv"
 CHECKPOINT_FILE = "scrape_checkpoint.txt"
+
+FINAL_OUTPUT_CSV = "final_article_output.csv"
 
 BATCH_SIZE = 10  # How many articles to scrape per batch before flushing to disk.
 REQUEST_DELAY = 1.0  # Seconds to wait between requests.
@@ -102,6 +104,16 @@ def scrape_article(url: str) -> dict:
     return {"url": url, "title": title, "paragraphs": paragraphs}
 
 
+def combine_paragraphs(input_csv: str, SCRAPE_OUTPUT_CSV: str) -> None:
+    """Combine scraped paragraphs back into single rows per article."""
+    df = pd.read_csv(input_csv)
+    combined_df = df.groupby("url", as_index=False).agg(
+        title=("title", "first"),
+        text=("text", lambda s: " ".join(s.dropna().astype(str))),
+    )
+    combined_df.drop("title", axis=1).to_csv(SCRAPE_OUTPUT_CSV, index=False)
+
+
 _interrupted = False
 
 
@@ -116,7 +128,7 @@ signal.signal(signal.SIGTERM, _handle_signal)
 
 
 def main():
-    input_df = pd.read_csv(INPUT_CSV)
+    input_df = pd.read_csv(SCRAPE_INPUT_CSV)
     urls = input_df["URL"].dropna().unique().tolist()
     print(f"Total URLs in input: {len(urls)}")
 
@@ -170,7 +182,7 @@ def main():
 
             time.sleep(REQUEST_DELAY)
 
-        flush_rows(pending_rows, OUTPUT_CSV)
+        flush_rows(pending_rows, SCRAPE_OUTPUT_CSV)
         flush_rows(pending_failures, FAILURES_CSV)
         pending_rows.clear()
         pending_failures.clear()
@@ -184,10 +196,14 @@ def main():
 
     print(f"  Succeeded : {success_count}")
     print(f"  Failed    : {fail_count}")
-    print(f"  Output    : {OUTPUT_CSV}")
+    print(f"  Output    : {SCRAPE_OUTPUT_CSV}")
     if fail_count:
         print(f"  Failures  : {FAILURES_CSV}")
     print("=" * 60)
+
+    combine_paragraphs(SCRAPE_OUTPUT_CSV, FINAL_OUTPUT_CSV)
+
+    # TODO: Evan did note that we should filter out articles with recirculation rate > 1 as these are invalid but we ended up not dealing with that metrics
 
 
 if __name__ == "__main__":
