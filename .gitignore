@@ -1,2 +1,5 @@
-Data/ 
 .ipynb_checkpoints/
+*.csv
+*.h5
+*.npy
+*.txt
