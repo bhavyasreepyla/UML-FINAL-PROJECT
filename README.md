@@ -1,36 +1,35 @@
-# UML-FINAL-PROJECT
+# METLN Article Processing and Classification
 
-## DS 5230 Final Project
+## Environment and Dependencies
 
+```bash
+# 1. Install dependencies (pick one)
+bash scripts/setup.sh --pip       # Install via pip
+bash scripts/setup.sh --conda     # Create conda env
+bash scripts/setup.sh --check     # Just check what's installed
 
-| Teammates | Roles  |
-| :-------: | :----: |
-|  Srivalli  | Member |
-|  Bhavya    | Member |
-|  Cherry    | Member |
-|  Brandon   | Member |
+# 2. Activate environment (if using conda)
+conda activate METLN-classification
+```
 
 ## Dataset Setup
 
 Data from Google Drive
 https://drive.google.com/drive/folders/1qEl6-kTLLMMlakKNZrRNlJGNTqQjS9XV?usp=sharing
 
-## Environment Setup
-
-Install uv if not already present
-
-```py
-pip install uv
+```bash
+# Place your raw data
+cp posts-export-*.csv data/
+# or, if you already have the cleaned dataset:
+cp EDA_data-FULL.csv data/
 ```
 
-Install Environment
+## Configuration
 
-```py
-uv sync
-```
+All hyperparameters and paths are centralized in `src/config.py`. Key settings can be overridden via environment variables:
 
-Run using
-
-```py
-uv run filename.py
+```bash
+export DATA_DIR=/path/to/data
+export MODEL_DIR=/path/to/models
+export OUTPUT_DIR=/path/to/outputs
 ```
