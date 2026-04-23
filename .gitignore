@@ -3,3 +3,5 @@
 *.h5
 *.npy
 *.txt
+__pycache__/
+figs/
