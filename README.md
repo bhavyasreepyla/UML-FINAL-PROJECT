@@ -62,8 +62,8 @@ Run notebooks in this order:
 
 1. `article_classification_EDA.ipynb` - understand the data
 2. `data_prep-bv.ipynb` - clean and prepare features
-3. `Supervised Learning(Part -1).ipynb` - train and evaluate ML classifiers
-4. `article_classification.ipynb` - full pipeline with embeddings and deep models
+3. `article_classification.ipynb` - full pipeline with embeddings and deep models
+4. `Supervised Learning(Part -1).ipynb` - train and evaluate ML classifiers
 5. `#here`
 
 ---
