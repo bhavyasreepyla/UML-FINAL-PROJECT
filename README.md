@@ -28,7 +28,7 @@ UML-FINAL-PROJECT/
 
 ## Dataset
 
-Data is hosted on Google Drive (not included in this repo):
+Data is hosted on Google Drive:
 
 [Download from Google Drive](https://drive.google.com/drive/folders/1qEl6-kTLLMMlakKNZrRNlJGNTqQjS9XV?usp=sharing)
 
