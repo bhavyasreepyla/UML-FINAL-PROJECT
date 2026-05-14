@@ -1,18 +1,19 @@
-"""
-Data filtering, scraping, cleaning, preprocessing, and train/test splitting.
+"""End-to-end data pipeline: filter → scrape → merge → preprocess → split.
 
-This module covers the full data lifecycle:
-  1. Filtering raw exports into article-only DataFrames
-  2. Scraping article text from URLs (resumable with checkpoints)
-  3. Combining paragraph-level scrape output into one row per article
-  4. Saving EDA and ML-ready datasets
-  5. Text preprocessing (two representations):
-       - clean_combined : lowercased, lemmatized, stopword-removed, title-weighted.
-                          Best for TF-IDF and classical sklearn classifiers.
-       - raw_combined   : minimally processed (title [SEP] body), body capped at
-                          ~512 words.  Best for transformer models (SBERT, SetFit,
-                          Longformer) that have their own tokenizers.
-  6. Stratified train/test splitting with label encoding
+Library-only. Called by `scripts/prepare_data.py` and the data-prep notebook.
+Text preprocessing produces two representations: `clean_combined` (TF-IDF /
+sklearn) and `raw_combined` (transformer-friendly `title [SEP] body`).
+
+Inputs:
+    - Raw Chartbeat export CSV (path via `RAW_DATA_PATH`)
+    - Scraped paragraphs CSV (produced by `scrape_articles`)
+
+Outputs (CSVs written by the `save_*` / `preprocess_*` helpers):
+    - data/EDA_data-FULL.csv          — raw merge (metadata + text + label)
+    - data/EDA_data-PREPROCESSED.csv  — adds derived text columns
+    - data/ML_tagged_data-FULL.csv    — labelled subset
+    - data/ML_untagged_data-FULL.csv  — unlabelled subset
+    - scrape checkpoint TXT + failures CSV during scraping
 """
 
 import datetime
@@ -37,10 +38,12 @@ from sklearn.preprocessing import LabelEncoder
 from config import (
     CUSTOM_STOPWORDS,
     DATA_PATH,
+    EDA_PREPROCESSED_DATA_PATH,
     LABEL_COLUMN,
     MAX_CHARS,
     RAW_BODY_CAP,
     RANDOM_STATE,
+    SECTION_TITLE_MAX_CHARS,
     TEST_SIZE,
     TEXT_COLUMN,
     TITLE_COLUMN,
@@ -51,13 +54,12 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 1. RAW DATA FILTERING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _extract_user_need(tags: str) -> str:
-    """Return the first user-need value found in a comma-separated tag string."""
+    """Pull the `user_need: …` value out of a comma-separated tag string, else 'none'.
+
+    In:  comma-separated tag string (e.g. 'foo, user_need: educate-me').
+    Out: the user-need label or the string 'none'.
+    """
     for tag in tags.split(","):
         tag = tag.strip()
         if tag.startswith("user_need: "):
@@ -70,21 +72,11 @@ def filter_articles(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Filter the raw dataframe to only include rows that correspond to articles.
+    """Keep article rows only, optionally narrow to a date window, and attach `User_Needs`.
 
-    Parameters
-    ----------
-    raw_df : pd.DataFrame
-        The raw dataframe containing all data.
-    start_date : str, optional
-        Filter articles published on or after this date (YYYY-MM-DD).
-    end_date : str, optional
-        Filter articles published before this date (YYYY-MM-DD).
-
-    Returns
-    -------
-    pd.DataFrame
-        A filtered dataframe containing only article data.
+    In:  full raw export df; optional ISO date bounds (YYYY-MM-DD).
+    Out: a fresh df (input untouched) with `Publish_date` + `User_Needs` columns
+         and `other-not-news` rows removed.
     """
     art_df = raw_df[raw_df["Post id"].notna()].copy()
     logger.info("%d articles from %d total rows.", len(art_df), len(raw_df))
@@ -94,21 +86,22 @@ def filter_articles(
     )
 
     if start_date:
-        art_df = art_df[
+        art_df = art_df.loc[
             art_df["Publish_date"] >= datetime.datetime.strptime(start_date, "%Y-%m-%d")
-        ]
+        ].copy()
     if end_date:
-        art_df = art_df[
+        art_df = art_df.loc[
             art_df["Publish_date"] < datetime.datetime.strptime(end_date, "%Y-%m-%d")
-        ]
+        ].copy()
 
     logger.info(
         "Filtered to %d articles between %s and %s.",
         len(art_df), start_date, end_date,
     )
 
-    art_df["User_Needs"] = art_df["Tags"].apply(_extract_user_need)
-    art_df = art_df[art_df["User_Needs"] != "other-not-news"].reset_index(drop=True)
+    # `Tags` may be NaN — coerce to empty string before splitting.
+    art_df["User_Needs"] = art_df["Tags"].fillna("").apply(_extract_user_need)
+    art_df = art_df.loc[art_df["User_Needs"] != "other-not-news"].reset_index(drop=True)
 
     logger.info(
         "User Needs distribution:\n%s",
@@ -117,10 +110,6 @@ def filter_articles(
 
     return art_df
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 2. ARTICLE SCRAPING
-# ═══════════════════════════════════════════════════════════════════════════════
 
 _DEFAULT_HEADERS = {
     "User-Agent": (
@@ -138,12 +127,11 @@ def scrape_single_article(
     headers: Optional[dict] = None,
     timeout: int = 15,
 ) -> dict:
-    """Fetch and parse a single article page.
+    """Fetch one article URL and extract its title + paragraph texts.
 
-    Returns
-    -------
-    dict
-        Keys: ``url``, ``title``, ``paragraphs`` (list[str]).
+    In:  url; optional auth cookies; HTTP headers; request timeout (seconds).
+    Out: dict with keys `url`, `title`, `paragraphs` (list of paragraph strings).
+    Raises ValueError when the expected DOM structure isn't found.
     """
     headers = headers or _DEFAULT_HEADERS
     response = requests.get(url, cookies=cookies, headers=headers, timeout=timeout)
@@ -174,12 +162,18 @@ def scrape_single_article(
 
 
 class _GracefulInterrupt:
-    """Context manager that converts SIGINT/SIGTERM into a flag."""
+    """Context manager that turns SIGINT/SIGTERM into an `interrupted` flag.
+
+    Used during scraping so Ctrl-C finishes the current article and flushes
+    pending rows instead of dropping them.
+    """
 
     def __init__(self):
+        """Initialize with `interrupted=False`."""
         self.interrupted = False
 
     def __enter__(self):
+        """Install SIGINT/SIGTERM handlers and return self."""
         self._prev_int = signal.getsignal(signal.SIGINT)
         self._prev_term = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGINT, self._handle)
@@ -187,26 +181,31 @@ class _GracefulInterrupt:
         return self
 
     def __exit__(self, *_):
+        """Restore the previous signal handlers."""
         signal.signal(signal.SIGINT, self._prev_int)
         signal.signal(signal.SIGTERM, self._prev_term)
 
     def _handle(self, _signum, _frame):
+        """Set the `interrupted` flag and log a warning."""
         logger.warning("Interrupt received — finishing current article then saving…")
         self.interrupted = True
 
 
 def _load_checkpoint(path: Path) -> set[str]:
+    """Read scrape-checkpoint URLs from disk; return empty set if file missing."""
     if not path.exists():
         return set()
     return {line.strip() for line in path.read_text().splitlines() if line.strip()}
 
 
 def _append_checkpoint(path: Path, url: str) -> None:
+    """Append a successfully-scraped URL to the checkpoint file."""
     with path.open("a", encoding="utf-8") as fh:
         fh.write(url + "\n")
 
 
 def _flush_rows(rows: list[dict], path: Path) -> None:
+    """Append a list of dict rows to a CSV, writing a header only when new."""
     if not rows:
         return
     df = pd.DataFrame(rows)
@@ -223,9 +222,13 @@ def scrape_articles(
     batch_size: int = 10,
     request_delay: float = 1.0,
 ) -> None:
-    """Scrape article text from a CSV of URLs, saving results incrementally.
+    """Scrape article text in batches, with checkpointing and graceful interrupt.
 
-    Resumable: tracks completed URLs in a checkpoint file and skips on re-run.
+    In:  CSV of URLs (`URL` column); output/failure/checkpoint paths; optional
+         session cookies; batch size; per-request sleep.
+    Out: writes paragraph rows to `output_csv`, failures to `failures_csv`, and
+         a one-URL-per-line checkpoint to `checkpoint_file`. Resumable: a
+         re-run skips URLs already in the checkpoint.
     """
     input_df = pd.read_csv(input_csv)
     urls = input_df["URL"].dropna().unique().tolist()
@@ -291,13 +294,12 @@ def scrape_articles(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 3. PARAGRAPH COMBINING & DATASET ASSEMBLY
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def combine_paragraphs(input_csv: str, output_csv: str) -> None:
-    """Combine paragraph-level scrape output into one row per article."""
+    """Group paragraph-level scrape output into one row per article URL.
+
+    In:  paragraph CSV (`url`, `title`, `text`) from `scrape_articles`.
+    Out: writes a combined CSV with one row per `url`, paragraphs concatenated.
+    """
     df = pd.read_csv(input_csv)
     combined = df.groupby("url", as_index=False).agg(
         title=("title", "first"),
@@ -317,7 +319,11 @@ _ML_COLUMNS = ["URL", "Title", "text", "User_Needs"]
 
 
 def _merge_article_text(raw_df: pd.DataFrame, text_df: pd.DataFrame) -> pd.DataFrame:
-    """Inner-join raw metadata with scraped article text."""
+    """Inner-join raw metadata with scraped article text. Inputs are not mutated.
+
+    In:  filtered article df (with `URL` column); text df (with `url` column).
+    Out: merged df with the duplicate `url` column dropped.
+    """
     merged = raw_df.merge(text_df, left_on="URL", right_on="url", how="inner")
     return merged.drop(columns=["url"])
 
@@ -327,11 +333,15 @@ def save_eda_dataset(
     text_df: pd.DataFrame,
     output_path: str,
 ) -> pd.DataFrame:
-    """Merge, clean, and save a dataset suitable for exploratory analysis."""
+    """Merge → drop nulls → write the EDA CSV (raw merge). Inputs are not mutated.
+
+    In:  filtered article df; scraped-text df; output CSV path.
+    Out: returns the cleaned df and writes it to `output_path`.
+    """
     merged = _merge_article_text(raw_df, text_df)
     eda_df = merged[_EDA_COLUMNS].copy()
     eda_df["Tablet views"] = eda_df["Tablet views"].fillna(0)
-    eda_df = eda_df.dropna(ignore_index=True)
+    eda_df = eda_df.dropna().reset_index(drop=True)
 
     eda_df.to_csv(output_path, index=False)
     logger.info("Saved EDA dataset (%d rows) → %s", len(eda_df), output_path)
@@ -344,12 +354,16 @@ def save_ml_datasets(
     tagged_path: str,
     untagged_path: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Merge, split by label presence, and save ML-ready datasets."""
-    merged = _merge_article_text(raw_df, text_df)
-    ml_df = merged[_ML_COLUMNS].dropna(ignore_index=True)
+    """Merge → split by label presence → write tagged + untagged ML CSVs.
 
-    tagged_df = ml_df[ml_df["User_Needs"] != "none"].reset_index(drop=True)
-    untagged_df = ml_df[ml_df["User_Needs"] == "none"].reset_index(drop=True)
+    In:  filtered article df; scraped-text df; output paths for tagged/untagged.
+    Out: (tagged_df, untagged_df); writes both CSVs as a side effect.
+    """
+    merged = _merge_article_text(raw_df, text_df)
+    ml_df = merged[_ML_COLUMNS].dropna().reset_index(drop=True)
+
+    tagged_df = ml_df.loc[ml_df["User_Needs"] != "none"].reset_index(drop=True).copy()
+    untagged_df = ml_df.loc[ml_df["User_Needs"] == "none"].reset_index(drop=True).copy()
 
     tagged_df.to_csv(tagged_path, index=False)
     untagged_df.to_csv(untagged_path, index=False)
@@ -359,13 +373,8 @@ def save_ml_datasets(
     return tagged_df, untagged_df
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 4. TEXT PREPROCESSING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _ensure_nltk():
-    """Download required NLTK data if missing."""
+    """Download required NLTK corpora the first time they're needed."""
     import nltk
     for resource in ("punkt", "punkt_tab", "wordnet", "stopwords", "omw-1.4"):
         try:
@@ -383,11 +392,15 @@ _STOP = set(stopwords.words("english")) | CUSTOM_STOPWORDS
 
 
 def clean_text(text: str) -> str:
-    """Lowercase, strip HTML/URLs/punctuation, lemmatize, remove stopwords."""
+    """Lowercase, strip HTML/URLs/punctuation, lemmatize, and drop stopwords.
+
+    In:  raw text.
+    Out: cleaned text — space-joined lemmatized tokens (length > 2, non-stopword).
+    """
     text = str(text).lower()
-    text = re.sub(r"http\S+|www\.\S+", "", text)   # URLs
-    text = re.sub(r"<[^>]+>", "", text)             # HTML tags
-    text = re.sub(r"[^a-z\s]", " ", text)           # non-alpha
+    text = re.sub(r"http\S+|www\.\S+", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"[^a-z\s]", " ", text)
     tokens = word_tokenize(text)
     tokens = [_lemmatizer.lemmatize(t) for t in tokens
               if t not in _STOP and len(t) > 2]
@@ -395,48 +408,92 @@ def clean_text(text: str) -> str:
 
 
 def build_combined_clean(row, title_weight: int = TITLE_WEIGHT) -> str:
-    """Cleaned text with title repeated for TF-IDF / sklearn classifiers."""
+    """Build a cleaned-text input with the title repeated for TF-IDF emphasis.
+
+    In:  DataFrame row with `Title` + `text`; how many times to repeat title.
+    Out: single space-joined cleaned string.
+    """
     title_clean = clean_text(row[TITLE_COLUMN])
     body_clean = clean_text(row[TEXT_COLUMN])
     return " ".join([title_clean] * title_weight + [body_clean])
 
 
 def build_combined_raw(row) -> str:
-    """Minimally processed text for transformer models (title [SEP] body)."""
+    """Build a minimally-processed `title [SEP] body` input for transformer models.
+
+    In:  DataFrame row with `Title` + `text`. Body is truncated to RAW_BODY_CAP words.
+    Out: single string `"title [SEP] body words..."`.
+    """
     title = str(row[TITLE_COLUMN]).strip()
     body = str(row[TEXT_COLUMN]).strip()
     body_words = body.split()[:RAW_BODY_CAP]
     return f"{title} [SEP] {' '.join(body_words)}"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 5. LOADING & ENRICHMENT
-# ═══════════════════════════════════════════════════════════════════════════════
+def build_section_title_text(row, max_chars: int = SECTION_TITLE_MAX_CHARS) -> str:
+    """Build a `section | title | body` input for RoBERTa-style fine-tuning.
+
+    In:  DataFrame row with `Section`, `Title`, `text`; max output chars.
+    Out: char-capped string `"section | title | body"`.
+    """
+    section = "" if pd.isna(row.get("Section")) else str(row["Section"])
+    title = "" if pd.isna(row.get(TITLE_COLUMN)) else str(row[TITLE_COLUMN])
+    body = "" if pd.isna(row.get(TEXT_COLUMN)) else str(row[TEXT_COLUMN])
+    return f"{section} | {title} | {body}"[:max_chars]
+
+
+_PREPROCESSED_COLUMNS = ("combined_text", "combined_short", "clean_combined", "raw_combined")
+
+
+def preprocess_eda_dataset(
+    df: pd.DataFrame,
+    save_path: Optional[str] = EDA_PREPROCESSED_DATA_PATH,
+) -> pd.DataFrame:
+    """Add derived text columns on a copy and (optionally) save the result.
+
+    In:  raw-merge df; output path (default = EDA_PREPROCESSED_DATA_PATH).
+    Out: new df with `combined_text`, `combined_short`, `clean_combined`,
+         `raw_combined` columns added. Writes to `save_path` unless None.
+         The input `df` is never modified, and the FULL CSV on disk is never
+         overwritten — outputs always go to a distinct filename.
+    """
+    out = df.copy()
+    out[TEXT_COLUMN] = out[TEXT_COLUMN].fillna("")
+    out["combined_text"] = out[TITLE_COLUMN].astype(str) + ". " + out[TEXT_COLUMN]
+    out["combined_short"] = (
+        out[TITLE_COLUMN].astype(str) + ". " + out[TEXT_COLUMN].str[:MAX_CHARS]
+    )
+
+    logger.info("Preprocessing %d articles (clean + raw combined)...", len(out))
+    out["clean_combined"] = out.apply(build_combined_clean, axis=1)
+    out["raw_combined"] = out.apply(build_combined_raw, axis=1)
+
+    if save_path:
+        out.to_csv(save_path, index=False)
+        logger.info("Saved preprocessed dataset (%d rows) → %s", len(out), save_path)
+    return out
 
 
 def load_dataframe(path: str = DATA_PATH) -> pd.DataFrame:
-    """Load the EDA CSV and add all text columns needed downstream."""
+    """Load the preprocessed EDA CSV, computing text columns in memory if absent.
+
+    In:  CSV path (default = EDA_data-PREPROCESSED.csv).
+    Out: DataFrame guaranteed to have the four preprocessed text columns. If
+         the file is the un-preprocessed FULL CSV, preprocessing runs in
+         memory and is NOT persisted (the FULL file on disk stays intact).
+    """
     df = pd.read_csv(path)
-
-    # Legacy columns (kept for backward compatibility)
-    df["combined_text"] = df[TITLE_COLUMN] + ". " + df[TEXT_COLUMN].fillna("")
-    df["combined_short"] = (
-        df[TITLE_COLUMN] + ". " + df[TEXT_COLUMN].fillna("").str[:MAX_CHARS]
-    )
-
-    # Preprocessed columns
-    print("Preprocessing all articles...")
-    df[TEXT_COLUMN] = df[TEXT_COLUMN].fillna("")
-    df["clean_combined"] = df.apply(build_combined_clean, axis=1)
-    df["raw_combined"] = df.apply(build_combined_raw, axis=1)
-    print(f"  clean_combined sample: {df['clean_combined'].iloc[0][:120]}...")
-    print(f"  raw_combined sample:   {df['raw_combined'].iloc[0][:120]}...")
-
+    if not all(col in df.columns for col in _PREPROCESSED_COLUMNS):
+        df = preprocess_eda_dataset(df, save_path=None)
     return df
 
 
 def print_data_summary(df: pd.DataFrame) -> None:
-    """Print a quick summary of the loaded dataset."""
+    """Print row count, columns, null counts, text-length stats, and label distribution.
+
+    In:  loaded DataFrame (typically the EDA preprocessed CSV).
+    Out: stdout summary; no return value.
+    """
     print(f"Loaded {len(df):,} articles  |  columns: {list(df.columns)}")
     print(f"Title null: {df[TITLE_COLUMN].isna().sum()}, "
           f"text null: {df[TEXT_COLUMN].isna().sum()}")
@@ -446,19 +503,22 @@ def print_data_summary(df: pd.DataFrame) -> None:
     print(f"\n{LABEL_COLUMN} distribution:\n{df[LABEL_COLUMN].value_counts()}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 6. TRAIN / TEST SPLITTING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def split_labeled_unlabeled(df: pd.DataFrame):
-    """Return (df_labeled, df_unlabeled) based on UNLABELED_VALUE."""
+    """Partition rows into labelled vs unlabelled (label == UNLABELED_VALUE).
+
+    In:  DataFrame with the project label column.
+    Out: (df_labeled, df_unlabeled) — both copies so the input is untouched.
+    """
     mask = df[LABEL_COLUMN] != UNLABELED_VALUE
     return df[mask].copy(), df[~mask].copy()
 
 
 def encode_labels(df_labeled: pd.DataFrame):
-    """Fit a LabelEncoder on the labeled subset; return (encoder, y_array)."""
+    """Fit a sklearn LabelEncoder on the labelled rows.
+
+    In:  labelled DataFrame.
+    Out: (fitted encoder, integer label array `y`).
+    """
     le = LabelEncoder()
     y = le.fit_transform(df_labeled[LABEL_COLUMN])
     return le, y
@@ -466,8 +526,11 @@ def encode_labels(df_labeled: pd.DataFrame):
 
 def stratified_split(X, y, indices, test_size=TEST_SIZE,
                      random_state=RANDOM_STATE):
-    """Stratified train/test split returning X_train, X_test, y_train,
-    y_test, train_idx, test_idx."""
+    """Stratified train/test split that also carries an integer index array through.
+
+    In:  feature array `X`, label array `y`, index array; split ratio + seed.
+    Out: (X_train, X_test, y_train, y_test, train_idx, test_idx).
+    """
     return train_test_split(
         X, y, indices,
         test_size=test_size,
@@ -477,15 +540,12 @@ def stratified_split(X, y, indices, test_size=TEST_SIZE,
 
 
 def prepare_supervised_data(df: pd.DataFrame):
-    """
-    One-stop function: split labeled/unlabeled, encode labels, build
-    train/test splits for every text variant.
+    """Split labelled / unlabelled, encode labels, build train/test for each text variant.
 
-    Returns a dict with all arrays needed downstream:
-      - X_train_clean / X_test_clean  : for TF-IDF + sklearn
-      - X_train_raw / X_test_raw      : for transformers (SetFit, Longformer)
-      - X_train_text / X_test_text    : legacy combined_text
-      - X_train_short / X_test_short  : legacy combined_short
+    In:  preprocessed DataFrame with the four text columns + the label column.
+    Out: dict containing df_labeled, df_unlabeled, label_encoder, label_names,
+         y_train / y_test, train_idx / test_idx / labeled_idx / unlabeled_idx,
+         and X_*_(text|short|clean|raw) arrays for both splits and unlabelled.
     """
     df_labeled, df_unlabeled = split_labeled_unlabeled(df)
     le, y = encode_labels(df_labeled)

@@ -1,31 +1,53 @@
-"""Project-wide configuration constants and model definitions."""
+"""Project-wide paths, hyperparameters, and model registry.
+
+Library-only. Imported by every other module to keep filenames, label sets,
+and per-model knobs in one place.
+
+Inputs:
+    Optional env vars: DATA_DIR, MODEL_DIR, CHECKPOINT_DIR, LOG_DIR, OUTPUT_DIR,
+    EDA_OUTPUT. Each overrides its default directory.
+
+Outputs:
+    Path constants (e.g. EDA_DATA_PATH), label/text constants, training
+    hyperparameters, EMBEDDING_MODELS registry, CLASS_COLORS for plotting.
+"""
 
 import os
 from dataclasses import dataclass
 from typing import Optional
 
-# Directory paths (overridable via environment variables)
-
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(PROJECT_ROOT, "data"))
-MODEL_DIR = os.environ.get("MODEL_DIR", os.path.join(PROJECT_ROOT, "models", "artifacts"))
-CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", os.path.join(PROJECT_ROOT, "models", "checkpoints"))
+MODEL_DIR = os.environ.get(
+    "MODEL_DIR", os.path.join(PROJECT_ROOT, "models", "artifacts")
+)
+CHECKPOINT_DIR = os.environ.get(
+    "CHECKPOINT_DIR", os.path.join(PROJECT_ROOT, "models", "checkpoints")
+)
 LOG_DIR = os.environ.get("LOG_DIR", os.path.join(PROJECT_ROOT, "logs"))
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.join(PROJECT_ROOT, "outputs"))
 EDA_OUTPUT = os.environ.get("EDA_OUTPUT", os.path.join(OUTPUT_DIR, "eda"))
 
-# Data file paths
+# Two canonical EDA CSVs (FULL = raw merge, PREPROCESSED = + text columns).
+# DATA_PATH aliases the preprocessed file — used as default load target.
+EMBEDDINGS_DIR = os.path.join(DATA_DIR, "embeddings")
 
-DATA_PATH = os.path.join(DATA_DIR, "EDA_data-FULL.csv")
 RAW_DATA_PATH = os.path.join(
     DATA_DIR,
     "posts-export-by-page-views-Feb-01-2025-Mar-05-2026-Masthead-Maine.csv",
 )
-EMBEDDINGS_MINI_PATH = os.path.join(DATA_DIR, "embeddings_mini.npy")
-EMBEDDINGS_MPNET_PATH = os.path.join(DATA_DIR, "embeddings_mpnet.npy")
-EMBEDDINGS_LONGFORMER_PATH = os.path.join(DATA_DIR, "embeddings_longformer.npy")
+EDA_DATA_PATH = os.path.join(DATA_DIR, "EDA_data-FULL.csv")
+EDA_PREPROCESSED_DATA_PATH = os.path.join(DATA_DIR, "EDA_data-PREPROCESSED.csv")
+ML_TAGGED_DATA_PATH = os.path.join(DATA_DIR, "ML_tagged_data-FULL.csv")
+ML_UNTAGGED_DATA_PATH = os.path.join(DATA_DIR, "ML_untagged_data-FULL.csv")
+DATA_PATH = EDA_PREPROCESSED_DATA_PATH
 
-# Label / text processing constants
+EMBEDDINGS_MINI_PATH = os.path.join(EMBEDDINGS_DIR, "embeddings_mini.npy")
+EMBEDDINGS_MPNET_PATH = os.path.join(EMBEDDINGS_DIR, "embeddings_mpnet.npy")
+EMBEDDINGS_LONGFORMER_PATH = os.path.join(EMBEDDINGS_DIR, "embeddings_longformer.npy")
+EMBEDDINGS_GEMMA_CLS_PATH = os.path.join(EMBEDDINGS_DIR, "embeddings_gemma_classification.npy")
+EMBEDDINGS_GEMMA_CLUSTER_PATH = os.path.join(EMBEDDINGS_DIR, "embeddings_gemma_cluster.npy")
+SEMANTIC_EMBEDDINGS_H5_PATH = os.path.join(EMBEDDINGS_DIR, "semantic_embeddings.h5")
 
 USER_NEEDS_LABELS = [
     "update-me",
@@ -42,34 +64,43 @@ TITLE_COLUMN = "Title"
 UNLABELED_VALUE = "none"
 
 MAX_CHARS = 2000
-TITLE_WEIGHT = 3          # repeat title N times in clean_combined for TF-IDF
-RAW_BODY_CAP = 512        # word-level cap for raw_combined (transformer input)
+TITLE_WEIGHT = 3
+RAW_BODY_CAP = 512
+SECTION_TITLE_MAX_CHARS = 1500
 
 RANDOM_STATE = 42
 TOP_K = 3
 
-# Domain-specific stopwords to add on top of NLTK english defaults
-CUSTOM_STOPWORDS = frozenset({
-    "maine", "said", "one", "also", "people", "state", "year",
-    "portland", "time", "like", "would", "get", "new",
-})
+CUSTOM_STOPWORDS = frozenset(
+    {
+        "maine",
+        "said",
+        "one",
+        "also",
+        "people",
+        "state",
+        "year",
+        "portland",
+        "time",
+        "like",
+        "would",
+        "get",
+        "new",
+    }
+)
 
-TEST_SIZE = 0.2 # Train / test split
+TEST_SIZE = 0.2
 
-# TF-IDF (unsupervised / EDA)
 TFIDF_MAX_FEATURES = 10_000
 TFIDF_NGRAM_RANGE = (1, 2)
 TFIDF_MIN_DF = 3
 TFIDF_MAX_DF = 0.95
 
-# TF-IDF (supervised classifiers)
 TFIDF_CLF_MAX_FEATURES = 15_000
 TFIDF_CLF_MIN_DF = 2
 
-# NMF
 N_TOPICS_NMF = 8
 
-# UMAP
 UMAP_N_NEIGHBORS = 15
 UMAP_MIN_DIST_CLUSTER = 0.0
 UMAP_MIN_DIST_VIZ = 0.1
@@ -77,16 +108,13 @@ UMAP_METRIC = "cosine"
 UMAP_N_COMPONENTS_CLUSTER = 5
 UMAP_N_COMPONENTS_VIZ = 2
 
-# HDBSCAN
 HDBSCAN_MIN_CLUSTER_SIZE = 50
 HDBSCAN_MIN_SAMPLES = 10
 HDBSCAN_METRIC = "euclidean"
 HDBSCAN_SELECTION_METHOD = "eom"
 
-# K-Means
 KMEANS_K_RANGE = range(3, 16)
 
-# Supervised classifiers
 LR_MAX_ITER = 2000
 LR_C = 1.0
 SVC_MAX_ITER = 5000
@@ -96,7 +124,6 @@ GBM_LEARNING_RATE = 0.1
 RF_N_ESTIMATORS = 300
 CV_N_SPLITS = 5
 
-# SetFit
 SETFIT_BASE_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 SETFIT_FEW_SHOT_PER_CLASS = 64
 SETFIT_BATCH_SIZE_FEW = 16
@@ -104,7 +131,67 @@ SETFIT_BATCH_SIZE_FULL = 32
 SETFIT_NUM_EPOCHS = 3
 SETFIT_NUM_ITERATIONS = 20
 
-# Longformer
+# Optional GBDT classifiers (catboost / xgboost / lightgbm packages)
+CATBOOST_PARAMS = dict(
+    iterations=1000,
+    depth=8,
+    learning_rate=0.04,
+    random_seed=RANDOM_STATE,
+    verbose=0,
+    auto_class_weights="Balanced",
+    bootstrap_type="MVS",
+)
+XGBOOST_PARAMS = dict(
+    n_estimators=1500,
+    max_depth=8,
+    learning_rate=0.025,
+    subsample=0.85,
+    colsample_bytree=0.8,
+    random_state=RANDOM_STATE,
+    n_jobs=-1,
+)
+LIGHTGBM_PARAMS = dict(
+    n_estimators=1200,
+    max_depth=8,
+    learning_rate=0.03,
+    subsample=0.85,
+    colsample_bytree=0.8,
+    random_state=RANDOM_STATE,
+    verbose=-1,
+    n_jobs=-1,
+)
+
+FFNN_HIDDEN_DIMS = (512, 256, 128)
+FFNN_DROPOUT = 0.35
+FFNN_LR = 1e-3
+FFNN_WEIGHT_DECAY = 1e-5
+FFNN_NUM_EPOCHS = 30
+FFNN_BATCH_SIZE = 64
+
+# RNN ensemble: reshape (N, 768) embeddings into (N, seq_len, feat_dim)
+RNN_SEQ_LEN = 12
+RNN_FEAT_DIM = 64  # seq_len * feat_dim must equal embedding dim (768)
+RNN_HIDDEN = 128
+RNN_NUM_LAYERS = 2
+RNN_DROPOUT = 0.3
+RNN_LR = 1e-3
+RNN_NUM_EPOCHS = 25
+RNN_BATCH_SIZE = 64
+
+ROBERTA_MODEL_ID = "roberta-base"
+ROBERTA_MAX_LENGTH = 512
+ROBERTA_TRAIN_BATCH_SIZE = 16
+ROBERTA_EVAL_BATCH_SIZE = 16
+ROBERTA_LEARNING_RATE = 2e-5
+ROBERTA_NUM_EPOCHS = 10
+ROBERTA_WARMUP_STEPS = 300
+ROBERTA_WEIGHT_DECAY = 0.01
+ROBERTA_GRADIENT_ACCUMULATION_STEPS = 2
+ROBERTA_FP16 = True
+ROBERTA_SAVE_TOTAL_LIMIT = 3
+ROBERTA_LOGGING_STEPS = 50
+ROBERTA_LR_SCHEDULER = "cosine"
+
 LONGFORMER_MODEL_ID = "allenai/longformer-base-4096"
 LONGFORMER_MAX_LENGTH = 4096
 LONGFORMER_TRAIN_BATCH_SIZE = 2
@@ -119,10 +206,11 @@ LONGFORMER_SAVE_STEPS = 200
 LONGFORMER_EVAL_STEPS = 200
 LONGFORMER_LOGGING_STEPS = 50
 
-# Embedding model definitions
+
 @dataclass(frozen=True)
 class EmbeddingModelConfig:
-    """Configuration for a sentence-embedding model."""
+    """Per-model encode settings: HF id, dimension, batch size, max seq length."""
+
     name: str
     model_id: str
     dim: int
@@ -152,16 +240,24 @@ EMBEDDING_MODELS = {
         batch_size=8,
         max_seq_length=4096,
     ),
+    "gemma": EmbeddingModelConfig(
+        name="EmbeddingGemma",
+        model_id="google/embeddinggemma-300m",
+        dim=768,
+        batch_size=32,
+        max_seq_length=2048,
+    ),
 }
 
-# EDA visualization colors 
+GEMMA_TASKS = ("classification", "clustering")
+
 CLASS_COLORS = {
-    "update-me": "#9962b4ff",
-    "give-me-perspective": "#83b37fff",
-    "educate-me": "#e3c375ff",
-    "connect-me": "#bb6861ff",
-    "inspire-me": "#7493e3ff",
-    "help-me": "#87c0c1ff",
+    "update-me": "#8a00cfff",
+    "give-me-perspective": "#0fb400ff",
+    "educate-me": "#e0a100ff",
+    "connect-me": "#c31000ff",
+    "inspire-me": "#0038c7ff",
+    "help-me": "#00cbcfff",
     "none": "#818181",
 }
 LABELED_CLASSES = [c for c in CLASS_COLORS if c != "none"]
