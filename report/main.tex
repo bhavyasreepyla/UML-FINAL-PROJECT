@@ -1,0 +1,401 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{enumerate}
+\usepackage{subcaption}
+\usepackage[colorlinks=true]{hyperref}
+\usepackage{hypcap}
+\usepackage{relsize}
+\usepackage{caption}
+\usepackage{array}
+\usepackage[margin=1in, paperwidth=8. 5in, paperheight=11in]{geometry}
+\usepackage{float}
+\usepackage{tabularx}
+\usepackage{textgreek}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage[shortlabels]{enumitem}
+\renewcommand{\qedsymbol}{$\blacksquare$}
+\usepackage{blindtext}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{xcolor}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+}
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+\definecolor{kmeans_1}{HTML}{e17854}
+\definecolor{kmeans_2}{HTML}{ebf5ae}
+\definecolor{kmeans_3}{HTML}{911b43}
+\definecolor{kmeans_4}{HTML}{f9e39f}
+\definecolor{kmeans_5}{HTML}{88c4ad}
+\definecolor{kmeans_6}{HTML}{675ca2}
+\lstset{frame=tb,
+  language=Python,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=3
+}
+
+% % for the quotations, hehe (bv)
+\usepackage [autostyle, english = american]{csquotes}
+\MakeOuterQuote{"}
+
+% \usepackage[backend=biber, style=mla,]{biblatex}
+
+
+\begin{document}
+\title{DS5230 Final Project \\ An exploration and classification of the METLN “article space”}
+\author{Bhavya Sree Pyla, Brandon Villalta Lopez, Khue Pham, Srivalli Vangaveti}
+\date{April 23\textsuperscript{rd}, 2026}
+\maketitle
+
+Github Repository: \href{https://github.com/bhavyasreepyla/UML-FINAL-PROJECT/tree/brandon}{UML-FINAL-PROJECT}
+
+\section{Introduction}
+\subsection{Background}
+The Maine Trust for Local News (METLN), a subsidiary of the National Trust for Local News, a 501(c)(3) non-profit committed to conserving local news across the United States. As Maine’s largest news organization, their newspapers and websites --- which include most of the largest newspapers in Maine, like the \textit{Press Herald} (Portland), the \textit{Sun Journal} (Lewiston), and the  \textit{Kennebec Journal} (Augusta), cover regional and statewide news in a variety of formats. \cite{metln} \\
+
+\noindent For all news organizations, the digital age has unlocked a dimension of performance analytics that is impossible with physical newspapers (e.g., number of views, time spent by a user “reading” an article,  etc.). In the pursuit of one such enhancement, starting August 2025, METLN stared to implement a set of “User Needs” tags used to classify an article into one of the following categories: \textit{Connect Me, Educate Me, Give Me Perspective, Help Me, Inspire Me, Update Me}. Amongst other things, one very useful outcome would be to understand what types of user needs are more “on-demand” at certain times of day on different days of the week (see Fig.~\ref{fig:proto_output}). At the current stage, there are multiple reasons for which this may not be achievable: 1) User Needs labels may not be representative or distinct enough, 2) the current dataset of labeled articles is relatively small and during a short time-frame. Therefore, our project sets the ground-work to make this possible by 1) exploring the "article space" of our dataset and how it maps back to the current labels and 2) by training classifier models to categorize articles based on these tags, so that the dataset can be expanded both retroactively (by classifying older articles) and proactively (by suggesting User Needs tags to editors when publishing a new article).
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{figs/user-need-demo.png}
+    \caption{Prototype output of a predictive model highlighting the most sought after types of articles at different times of the week. Note that the label “Divert Me” appears instead of “Connect Me” (provided by METLN).
+}
+    \label{fig:proto_output}
+\end{figure}
+
+\subsection{Problem Statement}
+
+There's one overarching problem statement that is \textit{not} directly addressed in this report: \textbf{Can we predict what type of articles (based on their User Needs tag) are most sought after by readers at different times of day, at different days of the week?} \\
+
+\noindent In order to address this problem statement, however, our work addresses the following problem statements: 1) \textbf{Are the User Needs tags distinct and representative enough to effectively categorize METLN articles?} 2) \textbf{How can we extend the available training data to effectively build a predictive performance model?}
+
+\section{Methods}
+\subsection{About the Data}
+METLN provided us with $\sim$1 year of aggregated performance data (e.g., views, time spent on-site, etc.) as well as metadata (e.g., tags, author, publish date, etc.) on 10,000 pages \textit{viewed} from February 1st, 2025, to early March, 2026. After filtering out static pages, short/non-standard format articles (e.g., interactive maps or photo galleries), and those published before Feb 1st, 2025, we were left with $\sim$3,800 tagged articles, and $\sim$4,700 untagged articles. With our school credentials, we have access to METLN publications, and so we set up a text-scrapping script that obtained the article text from all these articles. \\
+
+\noindent One important thing to notice is the large class imbalance in these categories. As visible in figure \ref{fig:pub_per_month}, and outlined in table \ref{tab:class_distribution}, there's a very disproportionate distribution of labels: \textit{update-me} articles represent almost half of the labeled dataset. As discussed in later sections, this will complicate modeling.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{figs/publish_month_stack.png}
+    \caption{Stacked bar plot showing the number of published articles per month in our dataset, color coded based on their User Needs category.}
+    \label{fig:pub_per_month}
+\end{figure}
+
+\subsection{Text embedding}
+ 
+Because most ML algorithms, for both clustering and classification explored require fixed-length numeric inputs, every article was converted into a dense embedding vector before training. Three pretrained embedding models were tested. Embedding quality consistently proved to be the dominant factor in downstream accuracy, even more impactful than classifier architecture choice.
+
+\begin{itemize}
+    \item \textbf{MPNet (all-mpnet-base-v2)} \cite{all-mpnet-base-v2} is a general-purpose sentence encoder producing 768-dimensional embeddings, used for all baseline experiments. Its 384-token context limit required long articles to be split into overlapping chunks, each independently embedded and averaged into a single article vector.
+    \item \textbf{MiniLM (all-MiniLM-L6-v2)} \cite{all-MiniLM-L6-v2} is a lightweight sentence transformer producing 384-dimensional embeddings. It served as a fast, low-resource baseline for rapid iteration during development. Because it shares MPNet's 384-token context window, the same overlapping-chunk averaging strategy was applied to long articles.
+    \item \textbf{EmbeddingGemma (google/embeddinggemma-300m)} \cite{vera2025embeddinggemma} is a task conditioned embedding model supporting structured prompt templates at inference time. A classification-specific template (\texttt{title: \{title\} | task: classification | text: \{body\}}) was used to produce embeddings oriented toward category discrimination. Both classification and clustering variants (768-d each) were precomputed and stored in an HDF5 file. Gemma embeddings consistently produced the highest downstream accuracy of any embedding strategy.
+    \item \textbf{BGE-M3 (BAAI/bge-m3)} \cite{2025m3embedding} is a multilingual dense retrieval model producing 1{,}024-dimensional embeddings, included as a higher-dimensional benchmark. Despite strong retrieval benchmark performance, BGE-M3 underperformed Gemma classification embeddings across all tree-based classifiers.
+    % \item \textbf{Longformer (allenai/longformer-base-4096)} is a transformer with a sparse sliding-window attention mechanism that supports sequences up to 4{,}096 tokens, making it the only model in the pipeline that could encode most articles without chunking. The pretrained model was used in feature-extraction mode (no fine-tuning): each article was tokenized and the corresponding hidden state was extracted as a 768-dimensional embedding. Longformer embeddings were included to test whether preserving full-document context would benefit downstream classifiers compared to the chunk-and-average approach required by the shorter-context SBERT models.
+\end{itemize}
+ 
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lcll}
+        \hline
+        Embedding Model & Dim. & Task Conditioning & Primary Use \\
+        \hline
+        all-mpnet-base-v2 & 768 & None & Baseline models, unsupervised clustering\\
+        all-MiniLM-L6-v2 & 384 & None & Unsupervised clustering \\
+        embeddinggemma-300m & 768 & Yes & Tree models, FFNN \\
+        BAAI/bge-m3 & 1{,}024 & None & Benchmarking \\
+        \hline
+    \end{tabular}
+    \caption{Summary of embedding strategies evaluated.}
+    \label{tab:embedding_strategies}
+\end{table}
+
+\subsection{Unsupervised: User Needs tag clustering}
+
+Per-class TF-IDF analysis (unigrams and bigrams, English stop words removed, sublinear TF scaling) was used to identify the most characteristic vocabulary for each User Needs category. The word clouds in Figure~\ref{fig:word-cloud} provide an intuitive view; quantitatively, we ranked terms by mean TF-IDF score within each class.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figs/EDA-word-cloud.png}
+    \caption{Word Cloud per each User Needs category. Certain stop words ("maine", "said", "one", "also", "people", "state", "year", "portland", "time", "like", "would", "get", "new") were filtered out as they were considered neutral words that appear in all if not most User Needs categories.}
+    \label{fig:word-cloud}
+\end{figure}
+
+\noindent To measure pairwise vocabulary overlap, we computed Jensen--Shannon divergence (JSD) (Figure~\ref{fig:jensen-shannon-div}) over term-frequency distributions built from a shared \texttt{CountVectorizer} (5{,}000 features, min document frequency of 3). Low JSD between a pair of classes indicates that their articles draw from similar word distributions and are therefore harder to distinguish lexically. The hierarchical clustering on JSD distances reveals which classes form natural vocabulary-based groups, independent of any semantic embedding.
+
+
+\noindent We applied Uniform Manifold Approximation and Projection (UMAP) to the 384-dimensional embedding space for 2 distinct purposes, each with its own projection:
+\begin{itemize}
+    \item Clustering Projection (5D). A 5-component UMAP reduction with minimum distance parameter ($min\_dist$ tuned for tighter cluster structure) served as the input space for density-based and centroid-based clustering. The higher dimensionality preserves more of the local neighborhood structure from the original embedding space, reducing information loss before cluster assignment.
+    \item Visualizing Projection (2D). As seen in Figure~\ref{fig:umap-2d}, a 2-component UMAP reduction with a larger minimum distance parameter was used to encourage visual clarity. All clustering scatterplot visualizations are in 2D. This projection prioritizes interpretability over geometric fidelity. Thus, cluster boundaries visible in 2D should be treated as approximate.
+\end{itemize}
+
+\noindent Both projections shared the same neighborhood size ($n\_neighbors$) and distance metric ($cosine$), ensuring consistency in how local structure was defined.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{figs/umap_clustering_embedding_space.png}
+    \caption{UMAP 2D projection of MiniLM article embeddings, colored by User Needs label.}
+    \label{fig:umap-2d}
+\end{figure}
+
+\noindent We applied two clustering algorithms to the 5D UMAP projection and evaluated their agreement with the User Needs labels on the labeled subset:
+
+\begin{itemize}
+    \item \textbf{HDBSCAN.} A density-based method that discovers clusters of varying density and assigns a noise label to points in sparse regions. We used the Euclidean metric on the UMAP-reduced space with the excess-of-mass cluster selection method.
+    \item \textbf{K-Means ($k{=}6$).} A centroid-based method with the number of clusters set to match the six User Needs classes, providing a direct test of whether forcing six clusters recovers the label structure.
+\end{itemize}
+
+\noindent Agreement was measured using Adjusted Rand Index (ARI), Normalized Mutual Information (NMI), and silhouette score (noise points excluded for HDBSCAN). All metrics were computed on the \textit{labeled subset only}, so the evaluation asks specifically whether unsupervised structure recovers the editorial labels. It is important to note that clustering was performed in the 5D UMAP space, while results were visualized by projecting cluster assignments onto the 2D scatter. Some apparent overlap between clusters in Figures~\ref{fig:umap-2d} and~\ref{fig:umap-kmean-sbert} may therefore be a projection artifact. Clusters that appear tangled in two dimensions can be better separated in the five-dimensional space where assignments were actually computed. 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{figs/kmean-sbert-umap.png}
+    \caption{K-Means cluster assignments visualized on the 2D-UMAP projection. Clustering was performed in 5D UMAP space; colors here reflect the 5D assignments projected down for display. K=6 was determined using silohuette score and inertia elbow plots.}
+    \label{fig:umap-kmean-sbert}
+\end{figure}
+
+\begin{itemize}
+    \item Cluster \textcolor{kmeans_3}{0-dark-red (n=1810)}
+    \begin{itemize}
+        \item Madison’s TimberHP files for bankruptcy
+        \item What’s next for Madison’s TimberHP after Chapter 11 bankruptcy filing?
+        \item Madison’s TimberHP emerges from Chapter 11 bankruptcy with eye on ‘sustainable’ future
+    \end{itemize}
+    \item Cluster \textcolor{kmeans_1}{1-orange (n=1224)}
+    \begin{itemize}
+        \item  Meet 15 central Maine boys basketball players to watch in 2025-26
+        \item Maine large-school boys basketball ready to go back to the future
+        \item Class B wide open at high school golf state championships
+    \end{itemize}
+    \item Cluster \textcolor{kmeans_4}{2-yellow (n=1262)}
+    \begin{itemize}
+        \item Farmington middle school principal’s ICE costume sparks backlash
+        \item Farmington principal issues apology in wake of uproar over ICE Halloween costume
+        \item A week after a photo showing Mt. Blue Middle School Principal
+    \end{itemize}
+    \item Cluster \textcolor{kmeans_2}{3-lime (n=1515)}
+    \begin{itemize}
+        \item Brian Boru stands as a reminder of Portland’s past. Is it time to move on?
+        \item One of the last places for veterans in Portland is for sale
+        \item Kennebunkport author to release new crime fiction novel
+    \end{itemize}
+    \item Cluster \textcolor{kmeans_5}{4-green (n=1384)}
+    \begin{itemize}
+        \item Federal CDC worker in Maine laid off by Trump administration
+        \item Augusta area frustrated by USPS staffing shortages, spotty mail delivery
+        \item What if the Postal Service delivered the mail?
+    \end{itemize}
+    \item Cluster \textcolor{kmeans_6}{5-blue (n=1411)}
+    \begin{itemize}
+        \item An American tragedy comes to Windham
+        \item Poor planning made a bad situation worse 
+        \item Lewiston child struck by vehicle on College Street
+    \end{itemize}
+\end{itemize}
+
+\subsection{Supervised: User Needs tag classification}
+ 
+The supervised learning task frames article classification as a six-class single-label problem. Given the full text of a news article, the objective is to predict which User Need it serves. The six categories ( \textit{connect-me, educate-me, give-me-perspective, help-me, inspire-me,} and \textit{update-me} ) form an editorial taxonomy describing the primary audience intent behind each article. \\
+ 
+\noindent The dataset comprised 3{,}805 labeled articles assembled during data preparation by merging content management system exports, Parsely engagement signals, and editorial tags. The label distribution was markedly imbalanced: \textit{update-me} accounted for nearly half of all samples (1{,}894 articles, 49.8\%), while \textit{help-me} represented only 2.7\% (102 articles). This imbalance was the central challenge throughout the modeling work. A stratified 80/20 train--test split (\texttt{random\_state=42}) was applied to preserve class proportions in both partitions, yielding 3{,}044 training samples and 761 held-out test samples used consistently across all models.
+ 
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lcc}
+        \hline
+        Class & Count & Percentage \\
+        \hline
+        connect-me & 292 & 7.7\% \\
+        educate-me & 584 & 15.4\% \\
+        give-me-perspective & 725 & 19.1\% \\
+        help-me & 102 & 2.7\% \\
+        inspire-me & 208 & 5.5\% \\
+        update-me & 1{,}894 & 49.8\% \\
+        \hline
+        \textbf{Total} & \textbf{3{,}805} & \textbf{100\%} \\
+        \hline
+    \end{tabular}
+    \caption{Class distribution of the labeled article dataset.}
+    \label{tab:class_distribution}
+\end{table}
+ 
+\noindent Before any real modeling, a ``most common class'' baseline was established: guessing \textit{update-me} for every article. This reaches 49.8\% accuracy on its own, and sets the floor any useful model has to clear. From there, two main strategies were explored. The first was to skip full fine-tuning and instead work in two stages: turn each article into a semantic embedding (a dense numeric vector where semantically similar articles end up close together), then train a lightweight classifier on those vectors. This is cheap to iterate on, and the embeddings are reusable by the clustering side of the project. The second strategy was to fine-tune a transformer end-to-end on the task, letting the language model itself adapt its internal representations to the User Needs distinctions.
+ 
+
+ 
+\subsubsection{Classifiers on precomputed embeddings}
+ 
+Seven modeling approaches were explored on top of the precomputed embeddings, progressing from simple statistical baselines through shallow neural networks and gradient-boosted tree ensembles. All models were evaluated on the same 761-sample held-out test set. Results from each experiment directly informed the selection of subsequent approaches.
+ 
+\paragraph{Gaussian Naïve Bayes.}
+A Gaussian Naïve Bayes classifier served as the first statistical baseline. GNB assumes conditional independence between features given the class label, an assumption rarely satisfied by correlated dense embeddings, but useful as a lower-bound reference. The model achieved a test accuracy of 48.75\% (macro F1: 0.43), with particularly poor performance on the minority classes \textit{help-me} and \textit{inspire-me}. Despite its limitations, the result confirmed that the embedding space carries meaningful class-discriminative signal.
+ 
+\paragraph{Majority class baseline.}
+As a sanity check, a majority class baseline was constructed by assigning every test article the single most frequent training label: \textit{update-me}. Since \textit{update-me} constitutes 49.8\% of the dataset, this trivial strategy achieved a test accuracy of approximately 49.8\%, slightly above the Gaussian Naïve Bayes result. This outcome underscored the severity of the class imbalance: a model with no learning ability whatsoever could outperform a probabilistic classifier simply by exploiting the label skew. It also established that any meaningful model needed to clear this 49.8\% threshold by a substantial margin to be considered useful.
+ 
+\paragraph{Feedforward neural network (FFNN).}
+A two-layer feedforward network was implemented in PyTorch on MPNet embeddings: Linear(768, 256) $\rightarrow$ ReLU $\rightarrow$ Dropout(0.3) $\rightarrow$ Linear(256, 6). Trained with Adam over 30 epochs (batch size 64, CrossEntropyLoss), it achieved a test accuracy of 67.54\%, a substantial jump over both baselines. An improved variant with class-weighted loss and validation-based early stopping was subsequently trained on Gemma classification embeddings, reaching 70.70\%. Best weights were saved as \texttt{best\_ffnn.pth} and \texttt{best\_ffnn\_gemma.pth}.
+ 
+\paragraph{RNN ensemble (LSTM, GRU, BiLSTM).}
+Three recurrent architectures - LSTM, GRU, and Bidirectional LSTM - were trained on MPNet embeddings reshaped into 12 time-steps of 64 features to simulate sequential input. All three used a hidden size of 128 and were trained for 20 epochs (lr=0.001). A majority-vote ensemble of the three yielded a test accuracy of 55.19\%, below the simpler FFNN. The artificial sequential structure imposed on the embeddings provided no genuine temporal signal, negating the recurrent inductive bias.
+ 
+\paragraph{XGBoost.}
+XGBoost was evaluated across all three embedding backends using a multi-class softmax objective. Results improved consistently with embedding quality: 67.94\% on MPNet, 69.65\% on BGE-M3, and 71.09\% on Gemma classification embeddings. The monotonic gain across embeddings reinforced that representation quality was the primary performance bottleneck.
+ 
+\paragraph{LightGBM.}
+LightGBM was evaluated in parallel with XGBoost and CatBoost under identical embedding inputs. It matched XGBoost on BGE-M3 (69.65\%) and achieved 70.70\% on Gemma embeddings, competitive throughout but marginally below XGBoost and CatBoost on the best features.
+ 
+\paragraph{CatBoost.}
+CatBoost was configured with 1{,}000 iterations, tree depth 8, learning rate 0.04, and \texttt{auto\_class\_weights=`Balanced'}, its native mechanism for up-weighting minority classes in proportion to their inverse frequency. On BGE-M3 embeddings it achieved 68.99\%; on Gemma classification embeddings it reached 71.48\%, the highest test accuracy among all embedding-based approaches evaluated. While 71.48\% represented a meaningful step above the baselines, the ceiling on what pre-computed embeddings could achieve became apparent.
+
+\subsubsection{Fine-tuned RoBERTa}
+
+RoBERTa (``Robustly Optimized BERT'') \cite{RoBERTaaaaa} is a refinement of Google's BERT. Same architecture, but trained longer, on more data, with better hyperparameter choices. The base version used here has 124 million parameters. The key difference from the previous approach is that here the entire model is fine-tuned on the User Needs task rather than frozen. Every weight in the transformer updates during training, so the representations themselves adapt to the specific distinctions the labels require.
+
+Each article was represented as its section, title, and body text concatenated with vertical bars, truncated to 1{,}500 characters, then tokenized to a maximum of 512 tokens. Including the section and title alongside the body gives the model extra context rather than just relying on article content alone.
+
+The label distribution is heavily skewed. The \textit{update-me} class alone accounts for 1{,}919 of the 3{,}855 tagged articles, while \textit{help-me} has only 103. Two mitigations were stacked to address this. First, random oversampling was applied to the training set, duplicating articles from minority classes until every class had the same number of training samples. This expanded the training set from roughly 3{,}080 articles to 9{,}210. Second, a class-weighted cross-entropy loss was used so that prediction errors on rare classes would contribute more to the overall loss than errors on common ones.
+
+Training ran for 10 epochs on a Colab Pro T4 GPU. The batch size was 16, combined with gradient accumulation of 2 (summing gradients across two mini-batches before each optimizer step, giving an effective batch size of 32 without more GPU memory). The learning rate was set to $2 \times 10^{-5}$ with a cosine decay schedule and 300 warmup steps. Mixed-precision (fp16) computation was used to halve memory use and speed training. Evaluation ran once per epoch, and the best-accuracy checkpoint was kept as the final model.
+
+\section{Results}
+% I'm thinking we'd split into subsection of main findings according to figures and model results we have so far, I'm just spit balling for now
+\subsection{Fine-tuned RoBERTa outperforms other models in classification}
+
+
+Table~\ref{tab:consolidated_results} presents test-set accuracy for every model--embedding combination, sorted in ascending order. All results correspond to the same stratified 761-sample held-out test set. Three patterns emerged. First, gradient-boosted trees consistently beat Naïve Bayes and the recurrent networks. Second, EmbeddingGemma gave one to two percentage points over MPNet and BGE across every classifier tried. Third, the ceiling for any frozen-embedding setup sat right around 71--72\% regardless of tuning. This plateau suggested that the pretrained embeddings themselves were the bottleneck, which motivated fine-tuning a language model directly on the task.
+ 
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lll}
+        \hline
+        Model & Embedding & Test Accuracy \\
+        \hline
+        Gaussian Naïve Bayes & N/A & 48.75\% \\
+        Majority Class (\textit{update-me}) & N/A & 49.8\% \\
+        LSTM / GRU / BiLSTM Ensemble & MPNet (768-d, reshaped) & 64.39\% \\
+        Feedforward NN (30 epochs) & MPNet (768-d) & 67.54\% \\
+        XGBoost & MPNet (768-d) & 67.94\% \\
+        CatBoost & BGE-M3 (1024-d) & 68.99\% \\
+        XGBoost & BGE-M3 (1024-d) & 69.65\% \\
+        LightGBM & BGE-M3 (1024-d) & 69.65\% \\
+        DistilBERT (end-to-end) & raw text & 69.5\% \\
+        Improved FFNN & Gemma (768-d) & 70.70\% \\
+        LightGBM & Gemma (768-d) & 70.70\% \\
+        XGBoost & Gemma (768-d) & 71.09\% \\
+        CatBoost (balanced weights) & Gemma (768-d) & 71.48\% \\
+        \textbf{RoBERTa (fine-tuned)} & \textbf{raw text} & \textbf{72.4\%} \\
+        \hline
+    \end{tabular}
+    \caption{Supervised classification accuracy across all model and embedding combinations (N=761, ascending order). The fine-tuned RoBERTa achieves the highest single-model result.}
+    \label{tab:consolidated_results}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figs/model_accuracy_comparison.png}
+    \caption{Test accuracy for all models on the held-out set (N=761). The dashed line marks the majority-class floor ($\sim$49.8\%). Color indicates embedding/approach family: gray for baselines, dark blue for MPNet/BGE-M3 classifiers, light blue for Gemma classifiers, and orange for the best embedding-based model (CatBoost + Gemma).}
+    \label{fig:model_accuracy_comparison}
+\end{figure}
+
+The fine-tuned RoBERTa reached \textbf{72.4\% test accuracy}, the best single-model result in the project, edging out CatBoost on EmbeddingGemma by just under a point. Per-class performance (Table \ref{tab:roberta_per_class}) tells a more nuanced story. The model is strong on the two largest classes, reaching 0.85 F1 on \textit{update-me} and 0.75 on \textit{give-me-perspective}. But it remains weak on the minority ones, with F1 values ranging from 0.43 to 0.62 across the four smallest classes, despite the oversampling and weighted loss applied during training.
+
+The \textit{educate-me} class is particularly telling. With 117 test articles it has substantial support, so its 0.43 F1 is not a pure data-scarcity problem. A more likely explanation is that its semantic boundaries overlap with \textit{give-me-perspective} and \textit{update-me} in ways the label definitions do not cleanly separate.
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lcccc}
+        \hline
+        Class & Precision & Recall & F1 & Support \\
+        \hline
+        update-me & 0.80 & 0.90 & 0.85 & 384 \\
+        give-me-perspective & 0.78 & 0.72 & 0.75 & 145 \\
+        help-me & 0.67 & 0.57 & 0.62 & 21 \\
+        inspire-me & 0.67 & 0.42 & 0.51 & 43 \\
+        connect-me & 0.49 & 0.54 & 0.51 & 61 \\
+        educate-me & 0.48 & 0.38 & 0.43 & 117 \\
+        \hline
+    \end{tabular}
+    \caption{Per-class performance of the fine-tuned RoBERTa model on the test set.}
+    \label{tab:roberta_per_class}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figs/roberta_CM.png}
+    \caption{Confusion matrix for the fine-tuned RoBERTa model on the test set. Rows are actual labels, columns are predicted labels.}
+    \label{fig:roberta_cm}
+\end{figure}
+
+\noindent The confusion matrix in Figure \ref{fig:roberta_cm} makes the model's failure modes concrete. The diagonal is heaviest for \textit{update-me} (340 correct) and \textit{give-me-perspective} (110 correct), confirming the strong majority-class performance. The biggest single error pattern is \textit{educate-me} being misclassified as \textit{update-me} (40 cases) or \textit{give-me-perspective} (20 cases), which reinforces the earlier point that these three labels overlap semantically. A second visible pattern is \textit{inspire-me} getting pulled toward \textit{connect-me} (18 cases), suggesting another pair of labels with fuzzy boundaries. \\
+
+\subsection{Exploration of the semantic space of METLN articles}
+\textit{Update-Me Tag Dominates}. As seen in Figure~\ref{fig:umap-2d}, the 6 User Needs classes occupy partially distinct regions of the embedding space but with substantial overlap. The \textit{update-me} and \textit{give-me-perspective} classes, which dominates the label set (Figures \ref{fig:umap-2d} and \ref{fig:pub_per_month}), spread across the largest area of the projection, while smaller classes like \textit{help-me} are too sparse to form coherent clusters on their own. \textit{update-me} especially dominates despite having a clear cut region on the bottom right of Figure~\ref{fig:umap-2d}. \\
+
+\noindent \textit{Sports vs. Everything Else}. Strictly semantically speaking (without comparison to the User Need labels), the K-Means partitions (k=6) produced clusters with varying coherence: the "Sport" category especially was tight and well-separated, while the central region of the embedding space contained interleaved assignments. 
+
+\noindent \textit{User Need labels do not correlate to topics clustered in the semantic space} Quantitatively, both HDBSCAM and K-Means achieved low ARI and NMI against the ground-truth labels, confirming that unsupervised clustering in the semantic embedding space does not naturally recover the User Needs patterns.
+
+\noindent \subsection{Exploration of User Needs Labels}
+The Jensen-Shannon divergence analysis \cite{Kingetsu_2021jaciii} in Figure~\ref{fig:jensen-shannon-div} revaled that some class pairs share highly similar vocabulary distributions, while others are lexically distinct. In particular, \textit{inspire-me} and \textit{connect-me} showed relatively low JSD, suggesting overlapping word usage. Centroid cosine similarities in the embedding space told a consistent story: the same pairs that are lexically close also have high centroid similarity, indicating that both surface level vocabulary and deeper semantic representations struggle to separate them.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{figs/jensen-shannon-divergence.png}
+    \caption{Pairwise Jensen-Shannon divergence between class vocabulary distribution.}
+    \label{fig:jensen-shannon-div}
+\end{figure}
+
+
+\section{Discussion and Limitations}
+\subsection{Class Imbalance \& \textit{Fuzzyness}}
+% Cause - over labeling ``update-me" tags
+% Some form of up/undersample may be able to help – SMOTE?
+% More labeled data could also help.
+Class imbalance was the single biggest obstacle to higher accuracy on the supervised task. The labeled set is dominated by \textit{update-me} (1{,}919 of 3{,}855 articles, roughly 50\%), while \textit{help-me} has only 103 examples and three other classes sit under 300. Both mitigation strategies applied in the RoBERTa experiment, random oversampling and class-weighted loss, helped but did not close the gap: the four smallest classes still land between 0.43 and 0.62 F1 while the two largest reach 0.75 and 0.85. The root cause appears to be over-labeling of \textit{update-me} at the source rather than a modeling problem, since the fine-tuned transformer is clearly capable of learning the majority classes well.
+
+Furthermore, as discussed in the unsupervised section (and some in the supervised section), there seems to be a significant level of overlap, or "fuzzy boundaries", with regards to these labels. This inherently limits the ability to predict User Needs performance.
+
+\subsection{Classification beyond the semantic space}
+
+One thing to consider is that most of our attempts to explore and classify the "article space" were primarily based on their semantic representation. For such a subjective task as to categorize articles into the types of user needs they are meant to cover, we need to be open to the possibility that the issue does not necessarily lie within the definition of the User Needs tags or their editorial use (though this is still worth reviewing), but within the assumption we have made that whatever distinguishes articles between User Needs categories can be found \textit{semantically}. Perhaps the difference between a \textit{connect-me} and a \textit{help-me} article lies beyond its semantic content, maybe it's not thematic, maybe it's some other "dimension" that we have not considered and that is more obvious for METLN editors. Thus, we hope this report and future conversations can help both improve our mapping of the article space, and provide helpful feedback regarding the effectiveness of the User Needs tags.
+
+\subsection{Next steps: toward time series analysis}
+\begin{enumerate}
+    \item \textbf{Refine embedding/labeling $\rightarrow$ better classification:}
+    As suggested in the previous subsection, a two-sided approach may improve our ability to classify articles into User Needs tags: on one side, we can explore different embedding methods or models that might outperform what we tried so far; on the other hand, our findings can be used to revise the current User Needs labels and the process in which their assigned, to ensure their distinction and consistent application.
+    \item \textbf{Expand dataset:} As discussed in the introduction, we aim to make it possible to perform a rigorous time-series analysis, which requires a large labeled dataset over a representative period of time. While we would encourage some exploration of what's possible with the current labeled articles, we foresee the need to retroactively classify articles published before the creation of the User Needs labels. It might also be useful to deliver a neatly-packaged model that can be implemented within the article publication pipeline, such that editors are suggested User Needs labels when posting a story.
+    \item \textbf{Time series analysis:}  There could be different approaches toward this type of predictive modeling. The easiest approach would be a simple "mode" model that looks at the most read categories at certain time-frame "buckets". A more robust approach might involve separate ARIMA-like models that can predict readership over time per category, and use that to recommend the highest-performing type of articles for each time-bucket. More abstract approaches might involve Fourier analysis of readership over time (grouped by User Needs) to obtain readership patterns that can be re-mapped into something like the table on figure~\ref{fig:proto_output}.
+\end{enumerate}
+
+% \subsection{Future integration into the METLN system}
+% Extend labeled dataset (retroactively)
+% Set up an “on-demand” system that classifies articles as published (proactively)
+
+% CatBoost on Gemma classification embeddings set the ceiling at 71.48\%, solid but not where we needed it for a task this nuanced. The pre-computed embedding pipeline had run its course. The logical next move was to fine-tune transformer models end-to-end, allowing the representation and the classifier to be jointly optimised for this specific task. That work, covering BERT-family and more advanced models, is handled by the rest of the team in the sections that follow.
+
+\newpage
+\bibliographystyle{plainnat}
+\bibliography{references}
+% \printbibliography
+
+\end{document}

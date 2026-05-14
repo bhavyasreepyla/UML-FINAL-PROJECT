@@ -1,28 +1,12 @@
 # METLN Article Processing and Classification
 
+Contributors: Bhavya Sree Pyla, Brandon Villalta Lopez, Srivalli Vangaveti, Cherry Pham
+
 This project partners with METLN to classify news articles into six User Needs categories using supervised and unsupervised machine learning, enabling the newsroom to retroactively tag historical content and analyze their content strategy across years of coverage.
 
 > Final project for Unsupervised Machine Learning, Spring 2026.
 
 ---
-
-## Project Structure
-
-```
-UML-FINAL-PROJECT/
-├── notebooks/
-│   ├── article_classification_EDA.ipynb      #exploratory data analysis
-│   ├── data_prep-bv.ipynb                    #data cleaning & preprocessing
-│   ├── Supervised Learning(Part -1).ipynb    #supervised classifiers
-│   ├── #here
-│   └── article_classification.ipynb          #full classification pipeline
-├── src/
-│   ├── config.py                             #all hyperparameters and paths
-│   └── data.py                               #data loading and processing utilities
-├── data/                                     #gitignored, CSV files go here
-├── requirements.txt
-└── README.md
-```
 
 ---
 
@@ -53,18 +37,6 @@ conda create -n METLN-classification python=3.10
 conda activate METLN-classification
 pip install -r requirements.txt
 ```
-
----
-
-## Quick Start
-
-Run notebooks in this order:
-
-1. `article_classification_EDA.ipynb` - understand the data
-2. `data_prep-bv.ipynb` - clean and prepare features
-3. `article_classification.ipynb` - full pipeline with embeddings and deep models
-4. `Supervised Learning(Part -1).ipynb` - train and evaluate ML classifiers
-5. `#here`
 
 ---
 
